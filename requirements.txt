@@ -1,0 +1,21 @@
+# AirPin macOS — Dependencies
+# Install: pip install -r requirements.txt
+
+# HID device access (IMU reading)
+hidapi>=0.14.0
+
+# Numerical computing
+numpy>=1.24.0
+
+# Screen capture (replaces DXGI)
+mss>=9.0.0
+
+# Global hotkeys (replaces Win32 GetAsyncKeyState)
+pynput>=1.7.0
+
+# macOS AppKit/Cocoa bindings (overlay window)
+pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-Quartz>=10.0
+
+# Optional: CoreAudio bindings (audio routing fallback)
+# pyobjc-framework-CoreAudio>=10.0

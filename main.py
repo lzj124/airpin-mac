@@ -184,9 +184,6 @@ class AirPinApp:
 
         try:
             while self.running:
-                # Process Cocoa events
-                self.overlay.process_events()
-
                 # Check hotkeys
                 triggered = self.hotkeys.poll()
                 if 'quit' in triggered:
@@ -265,12 +262,11 @@ class AirPinApp:
         if frame is None:
             return
 
-        # For now, print a simple status since we don't have OpenGL/AppKit rendering
-        # In a full implementation, we'd:
-        # 1. Create a CIImage/CGImage from the numpy frame
-        # 2. Apply translation by (offset_x, offset_y)
-        # 3. Draw to the overlay view with zoom
-        pass
+        # Pass frame + transforms to the overlay for rendering
+        self.overlay.render_frame(frame, offset_x, offset_y, self.zoom)
+
+        # Process Cocoa events to flush the draw
+        self.overlay.process_events()
 
     # ── Hotkey callbacks ──
 

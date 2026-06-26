@@ -11,12 +11,18 @@ Key properties:
   - opaque = False, backgroundColor = NSColor.clearColor
   - Borderless, full-screen on primary display
 
+Renders screen capture frames as CGImages with head-tracking offset
+and zoom transforms applied via CoreGraphics context.
+
 Replaces Win32 transparent overlay from Windows AirPin.
 """
 
+import ctypes
 import threading
 import time
 import sys
+
+import numpy as np
 
 try:
     import objc
@@ -24,9 +30,15 @@ try:
         NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
         NSScreen, NSBorderlessWindowMask, NSFloatingWindowLevel,
         NSApplicationActivationPolicyAccessory, NSEvent,
+        NSGraphicsContext,
     )
     from Quartz import (
+        CGRectMake,
         CGDisplayBounds, CGMainDisplayID,
+        CGImageCreate, CGDataProviderCreateWithData,
+        CGColorSpaceCreateDeviceRGB,
+        kCGImageAlphaNoneSkipFirst, kCGBitmapByteOrder32Little,
+        kCGRenderingIntentDefault,
         kCGNullWindowID, kCGWindowListOptionOnScreenOnly,
         CGWindowListCopyWindowInfo,
     )
@@ -39,28 +51,73 @@ import config
 
 
 class OverlayView(NSView):
-    """Custom NSView for rendering the overlay content.
-
-    Subclasses override drawRect_ or use OpenGL/Metal for rendering.
-    For simplicity, we use a callback-based approach: the main loop
-    provides a render function that gets called on each frame.
-    """
+    """Custom NSView for rendering captured frames with head-tracking offset."""
 
     def initWithFrame_(self, frame):
         self = objc.super(OverlayView, self).initWithFrame_(frame)
         if self is not None:
-            self._render_callback = None
+            self._overlay_window = None  # back-reference to OverlayWindow
         return self
-
-    def setRenderCallback_(self, callback):
-        self._render_callback = callback
-
-    def drawRect_(self, rect):
-        if self._render_callback:
-            self._render_callback(self, rect)
 
     def isOpaque(self):
         return False
+
+    def drawRect_(self, rect):
+        """Draw the current frame with head-tracking offset + zoom."""
+        overlay = self._overlay_window
+        if overlay is None:
+            return
+
+        # Get current frame under lock
+        with overlay._frame_lock:
+            frame = overlay._current_frame
+            ox = overlay._offset_x
+            oy = overlay._offset_y
+            zoom = overlay._zoom
+
+        if frame is None:
+            return
+
+        h, w = frame.shape[:2]
+        if h == 0 or w == 0:
+            return
+
+        # Convert numpy BGRA → CGImage
+        frame_contig = np.ascontiguousarray(frame)
+        data = bytes(frame_contig)
+
+        provider = CGDataProviderCreateWithData(None, data, len(data), None)
+        color_space = CGColorSpaceCreateDeviceRGB()
+        bitmap_info = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little
+
+        cg_image = CGImageCreate(
+            w, h, 8, 32, w * 4,
+            color_space, bitmap_info, provider,
+            None, False, kCGRenderingIntentDefault
+        )
+
+        if cg_image is None:
+            return
+
+        # Get CGContext from current NSGraphicsContext
+        ns_ctx = NSGraphicsContext.currentContext()
+        if ns_ctx is None:
+            return
+        ctx = ns_ctx.CGContext()
+
+        ctx.saveGState()
+
+        # Flip Y: CGImage origin is bottom-left, screen capture is top-left
+        ctx.translateCTM(0, h)
+        ctx.scaleCTM(1.0, -1.0)
+
+        # Apply head-tracking offset
+        ctx.translateCTM(ox, oy)
+
+        # Draw the image
+        ctx.drawImage_inRect_(cg_image, CGRectMake(0, 0, w, h))
+
+        ctx.restoreGState()
 
 
 class OverlayWindow:
@@ -77,6 +134,13 @@ class OverlayWindow:
         self._view = None
         self._running = False
         self._thread = None
+
+        # Frame data (protected by lock)
+        self._frame_lock = threading.Lock()
+        self._current_frame = None  # numpy array (H,W,4) BGRA
+        self._offset_x = 0.0
+        self._offset_y = 0.0
+        self._zoom = 1.0
 
         # Get primary display bounds
         self.x = 0
@@ -124,8 +188,9 @@ class OverlayWindow:
         # Make it cover the full screen
         self._window.setFrame_display_(frame, True)
 
-        # Create content view
+        # Create content view with back-reference
         self._view = OverlayView.alloc().initWithFrame_(frame)
+        self._view._overlay_window = self
         self._window.setContentView_(self._view)
 
         # Show window
@@ -135,10 +200,27 @@ class OverlayWindow:
         print(f"  Overlay: {self.width}x{self.height} "
               f"({self.width}x{self.height} pts) on primary display")
 
-    def set_render_callback(self, callback):
-        """Set the render callback for the overlay view."""
+    def render_frame(self, frame, offset_x=0.0, offset_y=0.0, zoom=1.0):
+        """Queue a captured frame for rendering.
+
+        Args:
+            frame: numpy array (H, W, 4) BGRA from screen capture
+            offset_x: horizontal pixel offset from head tracking
+            offset_y: vertical pixel offset
+            zoom: zoom factor (1.0 = native)
+        """
+        if frame is None:
+            return
+
+        with self._frame_lock:
+            self._current_frame = frame
+            self._offset_x = offset_x
+            self._offset_y = offset_y
+            self._zoom = zoom
+
+        # Trigger Cocoa redraw
         if self._view:
-            self._view.setRenderCallback_(callback)
+            self._view.setNeedsDisplay_(True)
 
     def refresh(self):
         """Force the overlay to redraw."""

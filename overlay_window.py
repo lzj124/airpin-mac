@@ -19,6 +19,7 @@ import time
 import sys
 
 try:
+    import objc
     from AppKit import (
         NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
         NSScreen, NSBorderlessWindowMask, NSFloatingWindowLevel,
@@ -46,7 +47,7 @@ class OverlayView(NSView):
     """
 
     def initWithFrame_(self, frame):
-        self = super().initWithFrame_(frame)
+        self = objc.super(OverlayView, self).initWithFrame_(frame)
         if self is not None:
             self._render_callback = None
         return self

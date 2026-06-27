@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Overlay test v3 — direct approach, no AppDelegate.
-Create window BEFORE entering event loop.
+Overlay test v4 — capture the ObjC exception that causes SIGTRAP.
 """
+import objc
 from AppKit import (
     NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
     NSScreen, NSWindowStyleMaskBorderless, NSFloatingWindowLevel,
     NSApplicationActivationPolicyAccessory,
 )
-from Foundation import NSObject
+from Foundation import NSObject, NSLog
 from PyObjCTools import AppHelper
+import traceback
 
 
 class TestView(NSView):
@@ -17,51 +18,61 @@ class TestView(NSView):
         return False
 
     def drawRect_(self, rect):
-        c = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.2, 0.2, 0.5)
-        c.set()
-        NSRectFill(self.bounds())
+        try:
+            c = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.2, 0.2, 0.5)
+            c.set()
+            NSRectFill(self.bounds())
+        except Exception as e:
+            print(f"drawRect EXCEPTION: {e}")
+            traceback.print_exc()
+
+
+class AppDelegate(NSObject):
+    def applicationDidFinishLaunching_(self, notification):
+        print(">> applicationDidFinishLaunching called!")
+        NSLog(">> didFinishLaunching")
+
+        screen = NSScreen.mainScreen()
+        frame = screen.frame()
+
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMaskBorderless,
+            NSBackingStoreBuffered,
+            False,
+        )
+        self.window.setTitle_("AirPin Test")
+        self.window.setOpaque_(False)
+        self.window.setBackgroundColor_(NSColor.clearColor())
+        self.window.setLevel_(NSFloatingWindowLevel)
+        self.window.setIgnoresMouseEvents_(True)
+        self.window.setHasShadow_(False)
+        self.window.setReleasedWhenClosed_(False)
+
+        view = TestView.alloc().initWithFrame_(frame)
+        self.window.setContentView_(view)
+        self.window.makeKeyAndOrderFront_(None)
+        self.window.display()
+        print(">> Window should be visible now!")
+
+    def applicationWillTerminate_(self, notification):
+        print(">> terminating")
 
 
 def main():
-    print("1. Creating NSApp...")
+    print("Starting v4...")
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-    print("2. Getting screen...")
-    screen = NSScreen.mainScreen()
-    frame = screen.frame()
-    print(f"   Screen: {frame.size.width}x{frame.size.height}")
+    delegate = AppDelegate.alloc().init()
+    app.setDelegate_(delegate)
 
-    print("3. Creating window...")
-    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-        frame,
-        NSWindowStyleMaskBorderless,
-        NSBackingStoreBuffered,
-        False,
-    )
-    win.setTitle_("AirPin Test")
-    win.setOpaque_(False)
-    win.setBackgroundColor_(NSColor.clearColor())
-    win.setLevel_(NSFloatingWindowLevel)
-    win.setIgnoresMouseEvents_(True)
-    win.setHasShadow_(False)
-    win.setReleasedWhenClosed_(False)
-
-    print("4. Creating view...")
-    view = TestView.alloc().initWithFrame_(frame)
-    win.setContentView_(view)
-
-    print("5. Ordering front...")
-    win.makeKeyAndOrderFront_(None)
-    win.display()
-
-    print("6. Entering event loop. Ctrl+C to quit.")
-    print("   You should see a RED tint over the whole screen now.")
-
+    print("Calling runConsoleEventLoop...")
     try:
-        app.run()
-    except KeyboardInterrupt:
-        print("Interrupted.")
+        AppHelper.runConsoleEventLoop(installInterrupt=True)
+    except Exception as e:
+        print(f"EXCEPTION: {e}")
+        traceback.print_exc()
 
     print("Done.")
 

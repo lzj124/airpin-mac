@@ -64,10 +64,60 @@ class OverlayView(NSView):
 
     def drawRect_(self, rect):
         """Draw the current frame with head-tracking offset + zoom."""
-        # PHASE 1: Minimal draw to test if window works at all
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.2, 0.2, 0.3).set()
-        self.bounds().fill()
-        return
+        overlay = self._overlay_window
+        if overlay is None:
+            return
+
+        # Get current frame under lock
+        with overlay._frame_lock:
+            frame = overlay._current_frame
+            ox = overlay._offset_x
+            oy = overlay._offset_y
+            zoom = overlay._zoom
+
+        if frame is None:
+            return
+
+        h, w = frame.shape[:2]
+        if h == 0 or w == 0:
+            return
+
+        # Convert numpy BGRA → CGImage
+        frame_contig = np.ascontiguousarray(frame)
+        data = bytes(frame_contig)
+
+        provider = CGDataProviderCreateWithData(None, data, len(data), None)
+        color_space = CGColorSpaceCreateDeviceRGB()
+        bitmap_info = kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little
+
+        cg_image = CGImageCreate(
+            w, h, 8, 32, w * 4,
+            color_space, bitmap_info, provider,
+            None, False, kCGRenderingIntentDefault
+        )
+
+        if cg_image is None:
+            return
+
+        # Get CGContext from current NSGraphicsContext
+        ns_ctx = NSGraphicsContext.currentContext()
+        if ns_ctx is None:
+            return
+        ctx = ns_ctx.CGContext()
+
+        ctx.saveGState()
+
+        # Flip Y: CGImage origin is bottom-left, screen capture is top-left
+        ctx.translateCTM(0, h)
+        ctx.scaleCTM(1.0, -1.0)
+
+        # Apply head-tracking offset
+        ctx.translateCTM(ox, oy)
+
+        # Draw the image
+        ctx.drawImage_inRect_(cg_image, CGRectMake(0, 0, w, h))
+
+        ctx.restoreGState()
 
 
 

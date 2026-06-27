@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Test v9 — use the REAL OverlayWindow from overlay_window.py.
+Test v10 — test the OverlayView itself, WITHOUT OverlayWindow.
 """
 import objc
 from AppKit import (
-    NSApplication, NSApplicationActivationPolicyAccessory,
+    NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
+    NSScreen, NSWindowStyleMaskBorderless, NSFloatingWindowLevel,
+    NSApplicationActivationPolicyAccessory, NSRectFill,
 )
-from Foundation import NSObject, NSTimer
-from PyObjCTools import AppHelper
+from Foundation import NSMakeRect, NSObject, NSTimer
 
-# Import the ACTUAL AirPin overlay module
-from overlay_window import OverlayWindow
-import config
+# Import the REAL OverlayView from overlay_window
+from overlay_window import OverlayView
 
-print("OverlayWindow imported OK")
+print("OverlayView imported OK")
 
 
 def main():
@@ -21,45 +21,41 @@ def main():
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     app.finishLaunching()
 
-    # Use the REAL OverlayWindow — exactly like main.py does
-    print("Creating real OverlayWindow...")
-    overlay = OverlayWindow()
-    overlay.start()
-    print("OverlayWindow started OK")
+    screen = NSScreen.mainScreen()
+    frame = screen.frame()
 
-    # NSTimer that calls render_frame (like main.py _tick)
-    class TickTarget(NSObject):
-        def init(self):
-            self = objc.super(TickTarget, self).init()
-            return self
-        def tick_(self, timer):
-            # Just trigger redraw, no actual frame data
-            overlay.refresh()
-
-    target = TickTarget.alloc().init()
-    timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        1.0 / 60.0, target, b'tick:', None, True
+    # Test A: OverlayView in an OPAQUE window
+    print("\n[A] OverlayView in opaque window...")
+    win_a = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        NSMakeRect(100, 100, 400, 300),
+        NSWindowStyleMaskBorderless,
+        NSBackingStoreBuffered, False,
     )
+    win_a.setOpaque_(True)
+    win_a.setBackgroundColor_(NSColor.blueColor())
+    win_a.setLevel_(NSFloatingWindowLevel)
 
-    # Stop after 5s
+    view_a = OverlayView.alloc().initWithFrame_(NSMakeRect(0, 0, 400, 300))
+    win_a.setContentView_(view_a)
+    win_a.makeKeyAndOrderFront_(None)
+
+    # Timer to stop after 3s
     class Stopper(NSObject):
         def fire_(self, t):
             NSApplication.sharedApplication().stop_(None)
-    stopper = Stopper.alloc().init()
-    stop_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        5.0, stopper, b'fire:', None, False
-    )
 
-    print("Running app.run() for 5s with real OverlayWindow...")
+    stopper = Stopper.alloc().init()
+    timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        3.0, stopper, b'fire:', None, False
+    )
+    print("  Running app.run() for 3s...")
     try:
         app.run()
-        print("SURVIVED with real OverlayWindow!")
+        print("  [A] SURVIVED")
+        win_a.orderOut_(None)
     except Exception as e:
-        print(f"CRASHED: {e}")
-        import traceback
-        traceback.print_exc()
-
-    overlay.close()
+        print(f"  [A] CRASHED: {e}")
+        return
 
 
 if __name__ == '__main__':

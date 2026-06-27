@@ -238,6 +238,10 @@ class AirPinApp:
 
                 self.frame_count += 1
 
+                # Periodic Cocoa event pump (keep system responsive)
+                if self.frame_count % 10 == 0:
+                    self.overlay.process_events()
+
                 # Periodic status
                 if self.frame_count % 600 == 0:
                     imu_status = 'OK' if (self.imu_tracker and
@@ -264,9 +268,6 @@ class AirPinApp:
 
         # Pass frame + transforms to the overlay for rendering
         self.overlay.render_frame(frame, offset_x, offset_y, self.zoom)
-
-        # Process Cocoa events to flush the draw
-        self.overlay.process_events()
 
     # ── Hotkey callbacks ──
 

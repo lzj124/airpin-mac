@@ -165,6 +165,7 @@ class OverlayWindow:
             self._app.setActivationPolicy_(
                 NSApplicationActivationPolicyAccessory
             )
+            self._app.finishLaunching()
 
         # Create window
         frame = NSMakeRect(self.x, self.y, self.width, self.height)

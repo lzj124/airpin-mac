@@ -41,6 +41,9 @@ try:
         kCGRenderingIntentDefault,
         kCGNullWindowID, kCGWindowListOptionOnScreenOnly,
         CGWindowListCopyWindowInfo,
+        CGContextSaveGState, CGContextRestoreGState,
+        CGContextTranslateCTM, CGContextScaleCTM,
+        CGContextDrawImage,
     )
     from Foundation import NSMakeRect, NSPoint, NSZeroRect
     HAS_APPKIT = True
@@ -105,19 +108,19 @@ class OverlayView(NSView):
             return
         ctx = ns_ctx.CGContext()
 
-        ctx.saveGState()
+        CGContextSaveGState(ctx)
 
         # Flip Y: CGImage origin is bottom-left, screen capture is top-left
-        ctx.translateCTM(0, h)
-        ctx.scaleCTM(1.0, -1.0)
+        CGContextTranslateCTM(ctx, 0, h)
+        CGContextScaleCTM(ctx, 1.0, -1.0)
 
         # Apply head-tracking offset
-        ctx.translateCTM(ox, oy)
+        CGContextTranslateCTM(ctx, ox, oy)
 
         # Draw the image
-        ctx.drawImage_inRect_(cg_image, CGRectMake(0, 0, w, h))
+        CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cg_image)
 
-        ctx.restoreGState()
+        CGContextRestoreGState(ctx)
 
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test v12 — systematically replicate OverlayWindow.start() inline.
-Binary search which property causes the crash.
+Test v13 — fix ObjC class reuse, test each OverlayWindow difference.
+v11 works, OverlayWindow.start() doesn't. Find the exact difference.
 """
 import objc
 from AppKit import (
@@ -12,35 +12,36 @@ from AppKit import (
 from Foundation import NSMakeRect, NSObject, NSTimer
 from overlay_window import OverlayView
 
+# Define ObjC classes ONCE at module level
+class Stopper(NSObject):
+    def fire_(self, t):
+        NSApplication.sharedApplication().stop_(None)
 
-def test(label, setup_fn, with_timer=False):
-    """Run a window test for 3 seconds."""
+class Ticker(NSObject):
+    def init(self):
+        self = objc.super(Ticker, self).init()
+        return self
+    def tick_(self, t):
+        if hasattr(self, '_view'):
+            self._view.setNeedsDisplay_(True)
+
+
+def run_test(label, win, view, use_timer=False):
     app = NSApplication.sharedApplication()
 
-    screen = NSScreen.mainScreen()
-    frame = screen.frame()
-
-    print(f"\n[{label}]")
-    win, view = setup_fn(frame)
-
-    if with_timer:
-        class Ticker(NSObject):
-            def tick_(self, t):
-                view.setNeedsDisplay_(True)
-        ticker = Ticker.alloc().init()
-        timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            1.0/60.0, ticker, b'tick:', None, True
-        )
-
-    class Stopper(NSObject):
-        def fire_(self, t):
-            NSApplication.sharedApplication().stop_(None)
     stopper = Stopper.alloc().init()
     stoptimer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         3.0, stopper, b'fire:', None, False
     )
 
-    print("  running 3s...")
+    if use_timer:
+        ticker = Ticker.alloc().init()
+        ticker._view = view
+        timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0/60.0, ticker, b'tick:', None, True
+        )
+
+    print(f"  running 3s...")
     try:
         app.run()
         print(f"  [{label}] SURVIVED")
@@ -56,42 +57,65 @@ def main():
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     app.finishLaunching()
 
-    # A: baseline (same as v11 — known to work)
-    def setup_a(frame):
-        win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False)
-        win.setOpaque_(False)
-        win.setBackgroundColor_(NSColor.clearColor())
-        win.setLevel_(NSFloatingWindowLevel)
-        win.setIgnoresMouseEvents_(True)
-        win.setHasShadow_(False)
-        view = OverlayView.alloc().initWithFrame_(frame)
-        win.setContentView_(view)
-        win.makeKeyAndOrderFront_(None)
-        return win, view
+    screen = NSScreen.mainScreen()
+    frame = screen.frame()
 
-    if not test("A baseline", setup_a):
-        print("Baseline failed?!"); return
+    # ── Test 1: NSBorderlessWindowMask (old name) vs NSWindowStyleMaskBorderless ──
+    print("\n[1] NSBorderlessWindowMask + timer")
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        frame, NSBorderlessWindowMask, NSBackingStoreBuffered, False)
+    win.setOpaque_(False)
+    win.setBackgroundColor_(NSColor.clearColor())
+    win.setLevel_(NSFloatingWindowLevel)
+    win.setIgnoresMouseEvents_(True)
+    win.setHasShadow_(False)
+    view = OverlayView.alloc().initWithFrame_(frame)
+    win.setContentView_(view)
+    win.makeKeyAndOrderFront_(None)
+    if not run_test("1", win, view, use_timer=True):
+        print("=> NSBorderlessWindowMask is the problem!"); return
 
-    # B: add setReleasedWhenClosed + setFrame_display
-    def setup_b(frame):
-        win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False)
-        win.setOpaque_(False)
-        win.setBackgroundColor_(NSColor.clearColor())
-        win.setLevel_(NSFloatingWindowLevel)
-        win.setIgnoresMouseEvents_(True)
-        win.setHasShadow_(False)
-        win.setReleasedWhenClosed_(False)       # NEW
-        win.setFrame_display_(frame, True)       # NEW
-        view = OverlayView.alloc().initWithFrame_(frame)
-        view._overlay_window = True  # set _overlay_window to truthy
-        win.setContentView_(view)
-        win.makeKeyAndOrderFront_(None)
-        return win, view
+    # ── Test 2: setReleasedWhenClosed + setFrame_display ──
+    print("\n[2] + setReleasedWhenClosed + setFrame_display + timer")
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False)
+    win.setOpaque_(False)
+    win.setBackgroundColor_(NSColor.clearColor())
+    win.setLevel_(NSFloatingWindowLevel)
+    win.setIgnoresMouseEvents_(True)
+    win.setHasShadow_(False)
+    win.setReleasedWhenClosed_(False)
+    win.setFrame_display_(frame, True)
+    view = OverlayView.alloc().initWithFrame_(frame)
+    view._overlay_window = True  # truthy, like OverlayWindow sets it
+    win.setContentView_(view)
+    win.makeKeyAndOrderFront_(None)
+    if not run_test("2", win, view, use_timer=True):
+        print("=> setReleasedWhenClosed/setFrame_display is the problem!"); return
 
-    if not test("B +releasedWhenClosed +setFrame_display +timer", setup_b, with_timer=True):
-        print("=> Found it in B!"); return
+    # ── Test 3: view._overlay_window = actual object with _frame_lock ──
+    print("\n[3] view._overlay_window = fake overlay with _frame_lock + timer")
+    import threading
+    class FakeOverlay:
+        _frame_lock = threading.Lock()
+        _current_frame = None
+        _offset_x = 0.0
+        _offset_y = 0.0
+        _zoom = 1.0
+
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False)
+    win.setOpaque_(False)
+    win.setBackgroundColor_(NSColor.clearColor())
+    win.setLevel_(NSFloatingWindowLevel)
+    win.setIgnoresMouseEvents_(True)
+    win.setHasShadow_(False)
+    view = OverlayView.alloc().initWithFrame_(frame)
+    view._overlay_window = FakeOverlay()
+    win.setContentView_(view)
+    win.makeKeyAndOrderFront_(None)
+    if not run_test("3", win, view, use_timer=True):
+        print("=> _overlay_window back-reference is the problem!"); return
 
     print("\n=== All survived ===")
 

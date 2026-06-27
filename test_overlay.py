@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
 """
-Minimal transparent overlay test.
-If THIS crashes, the problem is fundamental to PyObjC + transparent windows on this macOS.
-If it works, the problem is in AirPin's code.
+Minimal overlay test v2 — with AppDelegate pattern + actual window visibility.
 """
-import sys
 import objc
 from AppKit import (
     NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
     NSScreen, NSWindowStyleMaskBorderless, NSFloatingWindowLevel,
     NSApplicationActivationPolicyAccessory,
 )
-from Foundation import NSObject, NSLog
+from Foundation import NSObject, NSLog, NSMakeRect
 from PyObjCTools import AppHelper
 
 
 class TestView(NSView):
-    """Bare minimum view — does nothing in drawRect."""
 
     def isOpaque(self):
         return False
 
     def drawRect_(self, rect):
-        # Draw a translucent red rect so we can see if the window appears
-        c = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.2, 0.2, 0.3)
+        c = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.2, 0.2, 0.5)
         c.set()
         NSRectFill(self.bounds())
 
@@ -36,50 +31,40 @@ class AppDelegate(NSObject):
         frame = screen.frame()
         NSLog(f"Screen frame: {frame}")
 
-        try:
-            self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-                frame,
-                NSWindowStyleMaskBorderless,
-                NSBackingStoreBuffered,
-                False,
-            )
-            self.window.setOpaque_(False)
-            self.window.setBackgroundColor_(NSColor.clearColor())
-            self.window.setLevel_(NSFloatingWindowLevel)
-            self.window.setIgnoresMouseEvents_(True)
-            self.window.setHasShadow_(False)
-            self.window.setReleasedWhenClosed_(False)
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMaskBorderless,
+            NSBackingStoreBuffered,
+            False,
+        )
+        self.window.setTitle_("AirPin Test")
+        self.window.setOpaque_(False)
+        self.window.setBackgroundColor_(NSColor.clearColor())
+        self.window.setLevel_(NSFloatingWindowLevel)
+        self.window.setIgnoresMouseEvents_(True)
+        self.window.setHasShadow_(False)
+        self.window.setReleasedWhenClosed_(False)
 
-            view = TestView.alloc().initWithFrame_(frame)
-            self.window.setContentView_(view)
+        view = TestView.alloc().initWithFrame_(frame)
+        self.window.setContentView_(view)
 
-            self.window.makeKeyAndOrderFront_(None)
-            NSLog("Window shown OK!")
-            print("Window shown OK!")
-        except Exception as e:
-            NSLog(f"WINDOW ERROR: {e}")
-            print(f"WINDOW ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            AppHelper.stopEventLoop()
+        self.window.makeKeyAndOrderFront_(None)
+        NSLog("Window orderFront done")
+        print("Window shown OK! You should see a red tint. Ctrl+C to quit.")
 
 
 def main():
-    print("Minimal overlay test starting...")
+    print("Minimal overlay test v2...")
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
     delegate = AppDelegate.alloc().init()
     app.setDelegate_(delegate)
 
-    print("Entering event loop (Ctrl+C to quit)...")
     try:
         AppHelper.runConsoleEventLoop(installInterrupt=True)
-    except Exception as e:
-        print(f"EVENT LOOP ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-
+    except KeyboardInterrupt:
+        print("Interrupted.")
     print("Done.")
 
 

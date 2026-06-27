@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-Minimal overlay test v2 — with AppDelegate pattern + actual window visibility.
+Overlay test v3 — direct approach, no AppDelegate.
+Create window BEFORE entering event loop.
 """
-import objc
 from AppKit import (
     NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
     NSScreen, NSWindowStyleMaskBorderless, NSFloatingWindowLevel,
     NSApplicationActivationPolicyAccessory,
 )
-from Foundation import NSObject, NSLog, NSMakeRect
+from Foundation import NSObject
 from PyObjCTools import AppHelper
 
 
 class TestView(NSView):
-
     def isOpaque(self):
         return False
 
@@ -23,48 +22,47 @@ class TestView(NSView):
         NSRectFill(self.bounds())
 
 
-class AppDelegate(NSObject):
-    def applicationDidFinishLaunching_(self, notification):
-        NSLog("App did finish launching")
-
-        screen = NSScreen.mainScreen()
-        frame = screen.frame()
-        NSLog(f"Screen frame: {frame}")
-
-        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            frame,
-            NSWindowStyleMaskBorderless,
-            NSBackingStoreBuffered,
-            False,
-        )
-        self.window.setTitle_("AirPin Test")
-        self.window.setOpaque_(False)
-        self.window.setBackgroundColor_(NSColor.clearColor())
-        self.window.setLevel_(NSFloatingWindowLevel)
-        self.window.setIgnoresMouseEvents_(True)
-        self.window.setHasShadow_(False)
-        self.window.setReleasedWhenClosed_(False)
-
-        view = TestView.alloc().initWithFrame_(frame)
-        self.window.setContentView_(view)
-
-        self.window.makeKeyAndOrderFront_(None)
-        NSLog("Window orderFront done")
-        print("Window shown OK! You should see a red tint. Ctrl+C to quit.")
-
-
 def main():
-    print("Minimal overlay test v2...")
+    print("1. Creating NSApp...")
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-    delegate = AppDelegate.alloc().init()
-    app.setDelegate_(delegate)
+    print("2. Getting screen...")
+    screen = NSScreen.mainScreen()
+    frame = screen.frame()
+    print(f"   Screen: {frame.size.width}x{frame.size.height}")
+
+    print("3. Creating window...")
+    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        frame,
+        NSWindowStyleMaskBorderless,
+        NSBackingStoreBuffered,
+        False,
+    )
+    win.setTitle_("AirPin Test")
+    win.setOpaque_(False)
+    win.setBackgroundColor_(NSColor.clearColor())
+    win.setLevel_(NSFloatingWindowLevel)
+    win.setIgnoresMouseEvents_(True)
+    win.setHasShadow_(False)
+    win.setReleasedWhenClosed_(False)
+
+    print("4. Creating view...")
+    view = TestView.alloc().initWithFrame_(frame)
+    win.setContentView_(view)
+
+    print("5. Ordering front...")
+    win.makeKeyAndOrderFront_(None)
+    win.display()
+
+    print("6. Entering event loop. Ctrl+C to quit.")
+    print("   You should see a RED tint over the whole screen now.")
 
     try:
-        AppHelper.runConsoleEventLoop(installInterrupt=True)
+        app.run()
     except KeyboardInterrupt:
         print("Interrupted.")
+
     print("Done.")
 
 

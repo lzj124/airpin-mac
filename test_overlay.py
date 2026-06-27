@@ -1,33 +1,19 @@
 #!/usr/bin/env python3
 """
-Test v8 — overlay + pynput + mss capture thread + app.run()
-This replicates the full AirPin stack.
+Test v9 — use the REAL OverlayWindow from overlay_window.py.
 """
+import objc
 from AppKit import (
-    NSApplication, NSWindow, NSView, NSColor, NSBackingStoreBuffered,
-    NSScreen, NSWindowStyleMaskBorderless, NSFloatingWindowLevel,
-    NSApplicationActivationPolicyAccessory, NSRectFill,
+    NSApplication, NSApplicationActivationPolicyAccessory,
 )
-from Foundation import NSMakeRect, NSObject, NSTimer
-import time, traceback, threading
-import numpy as np
+from Foundation import NSObject, NSTimer
+from PyObjCTools import AppHelper
 
-try:
-    import mss
-    print("mss imported OK")
-except ImportError:
-    print("mss NOT available")
-    import sys; sys.exit(1)
+# Import the ACTUAL AirPin overlay module
+from overlay_window import OverlayWindow
+import config
 
-from pynput import keyboard
-
-
-class FillView(NSView):
-    def isOpaque(self):
-        return True
-    def drawRect_(self, rect):
-        NSColor.whiteColor().set()
-        NSRectFill(self.bounds())
+print("OverlayWindow imported OK")
 
 
 def main():
@@ -35,70 +21,24 @@ def main():
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
     app.finishLaunching()
 
-    # ── mss capture thread (same as AirPin) ──
-    print("Starting mss capture thread...")
-    sct = mss.mss()
-    monitor = sct.monitors[1]
-    print(f"  Monitor: {monitor['width']}x{monitor['height']}")
+    # Use the REAL OverlayWindow — exactly like main.py does
+    print("Creating real OverlayWindow...")
+    overlay = OverlayWindow()
+    overlay.start()
+    print("OverlayWindow started OK")
 
-    capture_running = True
-    frame_holder = [None]
-    frame_lock = threading.Lock()
-
-    def capture_loop():
-        while capture_running:
-            try:
-                img = sct.grab(monitor)
-                frame = np.frombuffer(img.bgra, dtype=np.uint8).reshape(
-                    img.height, img.width, 4
-                )
-                with frame_lock:
-                    frame_holder[0] = frame
-            except Exception as e:
-                print(f"  Capture error: {e}")
-            time.sleep(1.0 / 120)
-
-    cap_thread = threading.Thread(target=capture_loop, daemon=True)
-    cap_thread.start()
-    time.sleep(0.5)
-    print(f"  Capture OK, frame shape: {frame_holder[0].shape if frame_holder[0] is not None else 'None'}")
-
-    # ── Window ──
-    screen = NSScreen.mainScreen()
-    frame = screen.frame()
-    win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-        NSMakeRect(100, 100, 400, 300),
-        NSWindowStyleMaskBorderless,
-        NSBackingStoreBuffered, False,
-    )
-    win.setOpaque_(True)
-    win.setBackgroundColor_(NSColor.blueColor())
-    win.setLevel_(NSFloatingWindowLevel)
-    view = FillView.alloc().initWithFrame_(NSMakeRect(0, 0, 400, 300))
-    win.setContentView_(view)
-    win.makeKeyAndOrderFront_(None)
-
-    # ── pynput ──
-    listener = keyboard.Listener(on_press=lambda k: None, on_release=lambda k: None)
-    listener.start()
-    print("pynput listener started")
-
-    # ── NSTimer that reads frame + setNeedsDisplay (like AirPin _tick) ──
+    # NSTimer that calls render_frame (like main.py _tick)
     class TickTarget(NSObject):
         def init(self):
             self = objc.super(TickTarget, self).init()
             return self
         def tick_(self, timer):
-            # Read latest frame (like AirPin does)
-            with frame_lock:
-                f = frame_holder[0]
-            # Trigger redraw
-            view.setNeedsDisplay_(True)
+            # Just trigger redraw, no actual frame data
+            overlay.refresh()
 
-    import objc
     target = TickTarget.alloc().init()
     timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        1.0 / 120.0, target, b'tick:', None, True
+        1.0 / 60.0, target, b'tick:', None, True
     )
 
     # Stop after 5s
@@ -110,17 +50,16 @@ def main():
         5.0, stopper, b'fire:', None, False
     )
 
-    print("Running app.run() for 5s with full stack...")
+    print("Running app.run() for 5s with real OverlayWindow...")
     try:
         app.run()
-        print("SURVIVED full stack!")
+        print("SURVIVED with real OverlayWindow!")
     except Exception as e:
         print(f"CRASHED: {e}")
+        import traceback
         traceback.print_exc()
 
-    capture_running = False
-    listener.stop()
-    sct.close()
+    overlay.close()
 
 
 if __name__ == '__main__':

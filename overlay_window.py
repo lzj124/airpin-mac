@@ -219,10 +219,9 @@ class OverlayWindow:
             self._offset_y = offset_y
             self._zoom = zoom
 
-        # Trigger immediate Cocoa redraw (bypass event loop)
+        # Trigger Cocoa redraw (NSApp.run() loop will handle display)
         if self._view:
             self._view.setNeedsDisplay_(True)
-            self._view.displayIfNeeded()
 
     def refresh(self):
         """Force the overlay to redraw."""

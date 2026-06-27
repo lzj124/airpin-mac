@@ -179,83 +179,123 @@ class AirPinApp:
         return True
 
     def run(self):
-        """Main loop: capture → apply head offset → render overlay."""
+        """Main loop driven by NSApplication event loop + NSTimer.
+
+        macOS requires all UI work to happen inside NSApp.run().
+        We use an NSTimer callback for per-frame rendering.
+        """
+        import objc
+        from Foundation import NSObject, NSTimer, NSRunLoop
+        from PyObjCTools import AppHelper
+
         self.running = True
 
+        # Create an ObjC target class for NSTimer
+        class TimerTarget(NSObject):
+            def init(self):
+                self = objc.super(TimerTarget, self).init()
+                return self
+
+            def tick_(self, timer):
+                if not self._app.running:
+                    AppHelper.stopEventLoop()
+                    return
+                try:
+                    self._app._tick()
+                except Exception as e:
+                    print(f"  TICK ERROR: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self._app.running = False
+                    AppHelper.stopEventLoop()
+
+        target = TimerTarget.alloc().init()
+        target._app = self
+
+        # 120 FPS timer
+        timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0 / 120.0,
+            target,
+            b'tick:',
+            None,
+            True,
+        )
+        # Ensure timer fires during modal/event tracking modes too
+        NSRunLoop.currentRunLoop().addTimer_forMode_(
+            timer, 'NSEventTrackingRunLoopMode'
+        )
+
         try:
-            while self.running:
-                # Check hotkeys
-                triggered = self.hotkeys.poll()
-                if 'quit' in triggered:
-                    self.running = False
-                    break
-
-                # Compute dt
-                now = time.time()
-                dt_ms = (now - self.last_time) * 1000.0
-                self.last_time = now
-
-                # ── Get head orientation ──
-                pixel_offset_x = 0.0
-                pixel_offset_y = 0.0
-
-                if (self.imu_tracker and self.tracking_enabled
-                        and self.imu_tracker.imu_count > 0):
-                    dy, dp, dr = self.imu_tracker.get_orientation()
-                    gyro_mag = self.imu_tracker.get_gyro_magnitude()
-
-                    # Apply sensitivity
-                    dy *= self.args.sensitivity
-
-                    # Apply smooth follow filter
-                    if self.smooth_follow:
-                        yaw_offset = self.smooth_follow.update(
-                            dy, dt_ms, gyro_mag
-                        )
-                    else:
-                        yaw_offset = dy
-
-                    # Convert radians to pixels
-                    # Approximate pixels-per-radian from FOV
-                    ppd = self.screen_capture.width / math.radians(
-                        config.FOV_HORIZONTAL_DEG
-                    )
-                    pixel_offset_x = yaw_offset * ppd
-
-                    if config.INVERT_YAW:
-                        pixel_offset_x *= -1
-
-                    if config.PITCH_ENABLED:
-                        ppd_v = self.screen_capture.height / math.radians(
-                            config.FOV_VERTICAL_DEG
-                        )
-                        pixel_offset_y = dp * ppd_v
-                        if config.INVERT_PITCH:
-                            pixel_offset_y *= -1
-
-                # ── Render frame ──
-                self._render_frame(pixel_offset_x, pixel_offset_y)
-
-                self.frame_count += 1
-
-                # Periodic Cocoa event pump (keep system responsive)
-                if self.frame_count % 10 == 0:
-                    self.overlay.process_events()
-
-                # Periodic status
-                if self.frame_count % 600 == 0:
-                    imu_status = 'OK' if (self.imu_tracker and
-                                          self.imu_tracker.connected) else 'NONE'
-                    print(f"  Frame {self.frame_count}: "
-                          f"offset=({pixel_offset_x:.0f},{pixel_offset_y:.0f})px "
-                          f"zoom={self.zoom:.1f}x "
-                          f"tracking={'ON' if self.tracking_enabled else 'OFF'} "
-                          f"imu={imu_status}")
-
+            AppHelper.runConsoleEventLoop(installInterrupt=True)
         except KeyboardInterrupt:
             print("\nInterrupted.")
         finally:
             self.shutdown()
+
+    def _tick(self):
+        """Per-frame work, called by NSTimer."""
+        # Check hotkeys
+        triggered = self.hotkeys.poll()
+        if 'quit' in triggered:
+            self.running = False
+            return
+
+        # Compute dt
+        now = time.time()
+        dt_ms = (now - self.last_time) * 1000.0
+        self.last_time = now
+
+        # ── Get head orientation ──
+        pixel_offset_x = 0.0
+        pixel_offset_y = 0.0
+
+        if (self.imu_tracker and self.tracking_enabled
+                and self.imu_tracker.imu_count > 0):
+            dy, dp, dr = self.imu_tracker.get_orientation()
+            gyro_mag = self.imu_tracker.get_gyro_magnitude()
+
+            # Apply sensitivity
+            dy *= self.args.sensitivity
+
+            # Apply smooth follow filter
+            if self.smooth_follow:
+                yaw_offset = self.smooth_follow.update(
+                    dy, dt_ms, gyro_mag
+                )
+            else:
+                yaw_offset = dy
+
+            # Convert radians to pixels
+            ppd = self.screen_capture.width / math.radians(
+                config.FOV_HORIZONTAL_DEG
+            )
+            pixel_offset_x = yaw_offset * ppd
+
+            if config.INVERT_YAW:
+                pixel_offset_x *= -1
+
+            if config.PITCH_ENABLED:
+                ppd_v = self.screen_capture.height / math.radians(
+                    config.FOV_VERTICAL_DEG
+                )
+                pixel_offset_y = dp * ppd_v
+                if config.INVERT_PITCH:
+                    pixel_offset_y *= -1
+
+        # ── Render frame ──
+        self._render_frame(pixel_offset_x, pixel_offset_y)
+
+        self.frame_count += 1
+
+        # Periodic status
+        if self.frame_count % 600 == 0:
+            imu_status = 'OK' if (self.imu_tracker and
+                                  self.imu_tracker.connected) else 'NONE'
+            print(f"  Frame {self.frame_count}: "
+                  f"offset=({pixel_offset_x:.0f},{pixel_offset_y:.0f})px "
+                  f"zoom={self.zoom:.1f}x "
+                  f"tracking={'ON' if self.tracking_enabled else 'OFF'} "
+                  f"imu={imu_status}")
 
     def _render_frame(self, offset_x, offset_y):
         """Render the captured frame with head offset to the overlay."""

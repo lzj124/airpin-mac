@@ -71,12 +71,14 @@ class OverlayView(NSView):
         if overlay is None:
             return
 
-        # Get current frame under lock
+        # Get current frame under lock — keep reference alive!
         with overlay._frame_lock:
             frame = overlay._current_frame
             ox = overlay._offset_x
             oy = overlay._offset_y
             zoom = overlay._zoom
+            if frame is not None:
+                frame = np.ascontiguousarray(frame)
 
         if frame is None:
             return
@@ -85,9 +87,9 @@ class OverlayView(NSView):
         if h == 0 or w == 0:
             return
 
-        # Convert numpy BGRA → CGImage
-        frame_contig = np.ascontiguousarray(frame)
-        data = bytes(frame_contig)
+        # Keep data alive — store on self so GC doesn't collect it mid-draw
+        self._draw_data = bytes(frame)
+        data = self._draw_data
 
         provider = CGDataProviderCreateWithData(None, data, len(data), None)
         color_space = CGColorSpaceCreateDeviceRGB()
@@ -110,15 +112,8 @@ class OverlayView(NSView):
 
         CGContextSaveGState(ctx)
 
-        # Flip Y: CGImage origin is bottom-left, screen capture is top-left
-        CGContextTranslateCTM(ctx, 0, h)
-        CGContextScaleCTM(ctx, 1.0, -1.0)
-
-        # Apply head-tracking offset
-        CGContextTranslateCTM(ctx, ox, oy)
-
-        # Draw the image
-        CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cg_image)
+        # No Y flip — draw in natural orientation
+        CGContextDrawImage(ctx, CGRectMake(ox, oy, w, h), cg_image)
 
         CGContextRestoreGState(ctx)
 

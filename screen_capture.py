@@ -1,10 +1,10 @@
 """
-Screen capture for macOS using mss (MSS: Multiple Screen Shots).
+Screen capture for macOS using ScreenCaptureKit / CGWindowList.
 
-Captures the primary display's framebuffer at configurable FPS.
-Returns numpy arrays of pixel data suitable for OpenGL texture upload.
+Captures the primary display's framebuffer at native Retina resolution.
+Excludes the overlay window from capture to prevent feedback loops.
 
-Replaces DXGI-based capture on Windows.
+Uses CGWindowListCreateImage for reliable, overlay-excluded capture.
 """
 
 import time
@@ -12,28 +12,44 @@ import threading
 import numpy as np
 
 try:
-    import mss
-    HAS_MSS = True
+    from Quartz import (
+        CGWindowListCreateImage,
+        CGRectNull,
+        kCGWindowListOptionOnScreenOnly,
+        kCGNullWindowID,
+    )
+    HAS_QUARTZ = True
 except ImportError:
-    HAS_MSS = False
+    HAS_QUARTZ = False
+
+try:
+    from Quartz import (
+        CGWindowListCreateImage, CGRectNull,
+        kCGWindowListOption, kCGNullWindowID,
+    )
+except ImportError:
+    pass
 
 import config
 
 
 class ScreenCapture:
-    """Captures a display using mss at a target FPS in a background thread."""
+    """Captures a display using CGWindowListCreateImage.
+
+    This excludes the overlay window (set via set_exclude_window_id)
+    to prevent feedback loops, and captures at native Retina resolution.
+    """
 
     def __init__(self, monitor_index=None, capture_fps=None):
-        if not HAS_MSS:
+        if not HAS_QUARTZ:
             raise ImportError(
-                "mss package is required. Install with: pip install mss"
+                "Quartz framework is required (pyobjc-framework-Quartz)"
             )
 
         self._monitor_index = monitor_index or config.MONITOR_INDEX
         self._capture_fps = capture_fps or config.CAPTURE_FPS
         self._running = False
         self._thread = None
-        self._sct = None
         self._lock = threading.Lock()
 
         # Latest captured frame
@@ -42,33 +58,33 @@ class ScreenCapture:
         self._frame_count = 0
 
         # Monitor info
-        self._monitor = None
         self.width = 0
         self.height = 0
-        self.x = 0
-        self.y = 0
+
+        # Window ID to exclude from capture (the overlay window)
+        self._exclude_window_id = kCGNullWindowID
+
+        # CGImage → numpy buffer
+        from Quartz import (
+            CGImageGetBitsPerPixel, CGImageGetBytesPerRow,
+            CGImageGetWidth, CGImageGetHeight,
+            CGImageGetDataProvider, CGDataProviderCopyData,
+            CGImageGetBitmapInfo,
+        )
+        self._CGImageGetWidth = CGImageGetWidth
+        self._CGImageGetHeight = CGImageGetHeight
+        self._CGImageGetBytesPerRow = CGImageGetBytesPerRow
+        self._CGImageGetDataProvider = CGImageGetDataProvider
+        self._CGDataProviderCopyData = CGDataProviderCopyData
+
+    def set_exclude_window_id(self, window_id):
+        """Set the window ID to exclude from capture (overlay window)."""
+        self._exclude_window_id = window_id
 
     def start(self) -> bool:
-        """Start capturing in background thread. Returns True on success."""
-        self._sct = mss.mss()
-
-        # Enumerate monitors
-        monitors = self._sct.monitors
-        # mss monitors: [0] = all monitors combined, [1] = primary, [2+] = others
-        idx = self._monitor_index + 1  # offset for the "all monitors" entry
-        if idx >= len(monitors):
-            print(f"  Monitor {self._monitor_index} not found, using primary")
-            idx = 1
-
-        self._monitor = monitors[idx]
-        self.x = self._monitor['left']
-        self.y = self._monitor['top']
-        self.width = self._monitor['width']
-        self.height = self._monitor['height']
-
+        """Start capturing in background thread."""
         print(f"  Capture: monitor {self._monitor_index} "
-              f"({self.width}x{self.height} at +{self.x}+{self.y}) "
-              f"@ {self._capture_fps} FPS")
+              f"@ {self._capture_fps} FPS (CGWindowList)")
 
         self._running = True
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
@@ -89,19 +105,48 @@ class ScreenCapture:
                 continue
 
             try:
-                # Grab the monitor region
-                sct_img = self._sct.grab(self._monitor)
-                # mss returns BGRA bytes; convert to numpy array
-                frame = np.frombuffer(sct_img.bgra, dtype=np.uint8).reshape(
-                    sct_img.height, sct_img.width, 4
+                # Capture screen excluding the overlay window
+                # kCGWindowListOptionOnScreenOnly captures all on-screen windows
+                # except the one we pass as the "to exclude" parameter
+                cg_image = CGWindowListCreateImage(
+                    CGRectNull,
+                    kCGWindowListOptionOnScreenOnly,
+                    self._exclude_window_id,  # exclude overlay
+                    0,  # no image options
                 )
 
+                if cg_image is None:
+                    time.sleep(0.001)
+                    continue
+
+                w = self._CGImageGetWidth(cg_image)
+                h = self._CGImageGetHeight(cg_image)
+                bpr = self._CGImageGetBytesPerRow(cg_image)
+
+                # Copy pixel data
+                provider = self._CGImageGetDataProvider(cg_image)
+                raw_data = self._CGDataProviderCopyData(provider)
+
+                # Create numpy array (pad rows to bytesPerRow if needed)
+                arr = np.frombuffer(raw_data, dtype=np.uint8)
+                if bpr == w * 4:
+                    frame = arr.reshape(h, w, 4)
+                else:
+                    # Bytes per row may include padding
+                    frame = arr[:h * bpr].reshape(h, bpr)[:, :w * 4].reshape(h, w, 4)
+
                 with self._lock:
-                    self._frame = frame
+                    self._frame = np.ascontiguousarray(frame)
                     self._frame_time = now
                     self._frame_count += 1
 
+                if self.width == 0:
+                    self.width = w
+                    self.height = h
+                    print(f"  First capture: {w}x{h} (native res)")
+
                 last_capture = now
+
             except Exception as e:
                 print(f"  Capture error: {e}")
                 time.sleep(0.01)
@@ -139,31 +184,6 @@ class ScreenCapture:
         self._running = False
         if self._thread:
             self._thread.join(timeout=3.0)
-        if self._sct:
-            self._sct.close()
-            self._sct = None
 
     def __del__(self):
         self.stop()
-
-
-# ── Standalone test ──
-if __name__ == '__main__':
-    import sys
-
-    print("Screen Capture Test (mss)")
-    cap = ScreenCapture(monitor_index=0, capture_fps=30)
-    cap.start()
-
-    print("Capturing 10 frames...")
-    for i in range(10):
-        time.sleep(0.05)
-        info = cap.get_frame_info()
-        if info['frame'] is not None:
-            print(f"  Frame {info['count']}: {info['width']}x{info['height']} "
-                  f"avg={info['frame'].mean():.0f}")
-        else:
-            print(f"  Frame {info['count']}: waiting...")
-
-    cap.stop()
-    print("Done.")

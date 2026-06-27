@@ -127,6 +127,9 @@ class AirPinApp:
         self.overlay = OverlayWindow()
         self.overlay.start()
 
+        # Tell capture to exclude overlay window (prevents feedback loop)
+        self.screen_capture.set_exclude_window_id(self.overlay.window_id)
+
         # ── IMU Tracker ──
         print("\n[3/6] Connecting to RayNeo glasses...")
         if not self.args.no_imu:

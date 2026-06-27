@@ -188,6 +188,9 @@ class OverlayWindow:
         # Make it cover the full screen
         self._window.setFrame_display_(frame, True)
 
+        # Store window number for capture exclusion
+        self._window_id = self._window.windowNumber()
+
         # Create content view with back-reference
         self._view = OverlayView.alloc().initWithFrame_(frame)
         self._view._overlay_window = self
@@ -281,3 +284,8 @@ class OverlayWindow:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def window_id(self):
+        """Return CG window ID for capture exclusion."""
+        return getattr(self, '_window_id', 0)
